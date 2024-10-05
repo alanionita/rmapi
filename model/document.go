@@ -29,7 +29,7 @@ type Document struct {
 type MetadataDocument struct {
 	ID             string
 	Parent         string
-	VissibleName   string
+	VissibleName   string `json:"visibleName"`
 	Type           string
 	Version        int
 	ModifiedClient string
@@ -78,6 +78,17 @@ type BlobStorageResponse struct {
 	RelativePath       string `json:"relative_path"`
 	Url                string `json:"url"`
 	MaxUploadSizeBytes int64  `json:"maxuploadsize_bytes,omitifempty"`
+}
+
+type RootRequest struct {
+	Generation int64  `json:"generation"`
+	Hash       string `json:"hash"`
+}
+
+type PutRootRequest struct {
+	Generation int64  `json:"generation"`
+	Hash       string `json:"hash"`
+	Broadcast  bool   `json:"broadcast"`
 }
 
 // SyncCompleteRequest payload of the sync completion

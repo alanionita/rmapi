@@ -9,14 +9,15 @@ var ListDocs string
 var UpdateStatus string
 var UploadRequest string
 var DeleteEntry string
-var UploadBlob string
-var DownloadBlob string
-var SyncComplete string
+var RootUrl string
+var PutRootUrl string
+
+var DownloadFile string
 
 func init() {
 	docHost := "https://document-storage-production-dot-remarkable-production.appspot.com"
 	authHost := "https://webapp-prod.cloud.remarkable.engineering"
-	syncHost := "https://internal.cloud.remarkable.com"
+	newFileHost := "https://eu.tectonic.remarkable.com"
 
 	host := os.Getenv("RMAPI_DOC")
 	if host != "" {
@@ -33,7 +34,6 @@ func init() {
 	if host != "" {
 		authHost = host
 		docHost = host
-		syncHost = host
 	}
 
 	NewTokenDevice = authHost + "/token/json/2/device/new"
@@ -43,7 +43,7 @@ func init() {
 	UploadRequest = docHost + "/document-storage/json/2/upload/request"
 	DeleteEntry = docHost + "/document-storage/json/2/delete"
 
-	UploadBlob = syncHost + "/sync/v2/signed-urls/uploads"
-	DownloadBlob = syncHost + "/sync/v2/signed-urls/downloads"
-	SyncComplete = syncHost + "/sync/v2/sync-complete"
+	DownloadFile = newFileHost + "/sync/v3/files/"
+	RootUrl = newFileHost + "/sync/v4/root"
+	PutRootUrl = newFileHost + "/sync/v3/root"
 }

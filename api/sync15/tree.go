@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"sort"
@@ -20,18 +21,28 @@ const DocType = "80000000"
 const FileType = "0"
 const Delimiter = ':'
 
-func FileHashAndSize(file string) ([]byte, int64, error) {
+func FileHashAndSize(file string) ([]byte, int64, uint32, error) {
 	f, err := os.Open(file)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	defer f.Close()
 
 	hasher := sha256.New()
 	io.Copy(hasher, f)
 	h := hasher.Sum(nil)
+
+	_, err = f.Seek(0, io.SeekStart)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	crc32c := crc32.MakeTable(crc32.Castagnoli)
+	crc32 := crc32.New(crc32c)
+	io.Copy(crc32, f)
+	checksum := crc32.Sum32()
+
 	size, err := f.Seek(0, os.SEEK_CUR)
-	return h, size, err
+	return h, size, checksum, err
 
 }
 

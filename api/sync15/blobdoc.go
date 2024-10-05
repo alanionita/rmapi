@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"hash/crc32"
 	"io"
 	"sort"
 	"strconv"
@@ -50,7 +51,7 @@ func (d *BlobDoc) Rehash() error {
 	return nil
 }
 
-func (d *BlobDoc) MetadataHashAndReader() (hash string, reader io.Reader, err error) {
+func (d *BlobDoc) MetadataHashAndReader() (hash string, checksum uint32, reader io.Reader, size int64, err error) {
 	jsn, err := json.Marshal(d.Metadata)
 	if err != nil {
 		return
@@ -59,6 +60,11 @@ func (d *BlobDoc) MetadataHashAndReader() (hash string, reader io.Reader, err er
 	sha.Write(jsn)
 	hash = hex.EncodeToString(sha.Sum(nil))
 	log.Trace.Println("new hash", hash)
+
+	crc32c := crc32.MakeTable(crc32.Castagnoli)
+	checksum = crc32.Checksum(jsn, crc32c)
+
+	size = int64(len(jsn))
 	reader = bytes.NewReader(jsn)
 	found := false
 	for _, f := range d.Files {

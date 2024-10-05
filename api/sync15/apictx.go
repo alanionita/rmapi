@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"strconv"
@@ -158,7 +159,7 @@ func (ctx *ApiCtx) CreateDir(parentId, name string, notify bool) (*model.Documen
 
 	for _, f := range files.Files {
 		log.Info.Printf("File %s, path: %s", f.Name, f.Path)
-		hash, size, err := FileHashAndSize(f.Path)
+		hash, size, checksum, err := FileHashAndSize(f.Path)
 		if err != nil {
 			return nil, err
 		}
@@ -173,7 +174,7 @@ func (ctx *ApiCtx) CreateDir(parentId, name string, notify bool) (*model.Documen
 		if err != nil {
 			return nil, err
 		}
-		err = ctx.blobStorage.UploadBlob(hashStr, reader)
+		err = ctx.blobStorage.UploadBlob(hashStr, reader, size, checksum)
 
 		if err != nil {
 			return nil, err
@@ -188,7 +189,19 @@ func (ctx *ApiCtx) CreateDir(parentId, name string, notify bool) (*model.Documen
 		return nil, err
 	}
 	defer indexReader.Close()
-	err = ctx.blobStorage.UploadBlob(doc.Hash, indexReader)
+
+	crc32c := crc32.MakeTable(crc32.Castagnoli)
+	crc32 := crc32.New(crc32c)
+	size, _ := io.Copy(crc32, indexReader)
+	checksum := crc32.Sum32()
+
+	err = indexReader.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	indexReader, err = doc.IndexReader()
+	err = ctx.blobStorage.UploadBlob(doc.Hash, indexReader, size, checksum)
 	if err != nil {
 		return nil, err
 	}
@@ -230,11 +243,26 @@ func Sync(b *BlobStorage, tree *HashTree, operation func(t *HashTree) error) err
 		if err != nil {
 			return err
 		}
-		err = b.UploadBlob(tree.Hash, indexReader)
+		defer indexReader.Close()
+
+		crc32c := crc32.MakeTable(crc32.Castagnoli)
+		crc32 := crc32.New(crc32c)
+		size, _ := io.Copy(crc32, indexReader)
+		checksum := crc32.Sum32()
+
+		err = indexReader.Close()
 		if err != nil {
 			return err
 		}
-		defer indexReader.Close()
+
+		indexReader, err = tree.IndexReader()
+		if err != nil {
+			return err
+		}
+		err = b.UploadBlob(tree.Hash, indexReader, size, checksum)
+		if err != nil {
+			return err
+		}
 
 		log.Info.Println("updating root, old gen: ", tree.Generation)
 
@@ -297,7 +325,7 @@ func (ctx *ApiCtx) MoveEntry(src, dstDir *model.Node, name string) (*model.Node,
 		doc.Metadata.Parent = dstDir.Id()
 		doc.Metadata.MetadataModified = true
 
-		hashStr, reader, err := doc.MetadataHashAndReader()
+		hashStr, checksum, reader, size, err := doc.MetadataHashAndReader()
 		if err != nil {
 			return err
 		}
@@ -311,7 +339,7 @@ func (ctx *ApiCtx) MoveEntry(src, dstDir *model.Node, name string) (*model.Node,
 			return err
 		}
 
-		err = ctx.blobStorage.UploadBlob(hashStr, reader)
+		err = ctx.blobStorage.UploadBlob(hashStr, reader, size, checksum)
 
 		if err != nil {
 			return err
@@ -323,7 +351,17 @@ func (ctx *ApiCtx) MoveEntry(src, dstDir *model.Node, name string) (*model.Node,
 			return err
 		}
 		defer indexReader.Close()
-		return ctx.blobStorage.UploadBlob(doc.Hash, indexReader)
+		crc32c := crc32.MakeTable(crc32.Castagnoli)
+		crc32 := crc32.New(crc32c)
+		size, _ = io.Copy(crc32, indexReader)
+		checksum = crc32.Sum32()
+
+		err = indexReader.Close()
+		indexReader, err = doc.IndexReader()
+		if err != nil {
+			return err
+		}
+		return ctx.blobStorage.UploadBlob(doc.Hash, indexReader, size, checksum)
 	})
 
 	if err != nil {
@@ -373,7 +411,7 @@ func (ctx *ApiCtx) UploadDocument(parentId string, sourceDocPath string, notify 
 	doc := NewBlobDoc(name, id, model.DocumentType, parentId)
 	for _, f := range docFiles.Files {
 		log.Info.Printf("File %s, path: %s", f.Name, f.Path)
-		hash, size, err := FileHashAndSize(f.Path)
+		hash, size, checksum, err := FileHashAndSize(f.Path)
 		if err != nil {
 			return nil, err
 		}
@@ -388,7 +426,7 @@ func (ctx *ApiCtx) UploadDocument(parentId string, sourceDocPath string, notify 
 		if err != nil {
 			return nil, err
 		}
-		err = ctx.blobStorage.UploadBlob(hashStr, reader)
+		err = ctx.blobStorage.UploadBlob(hashStr, reader, size, checksum)
 
 		if err != nil {
 			return nil, err
@@ -398,12 +436,28 @@ func (ctx *ApiCtx) UploadDocument(parentId string, sourceDocPath string, notify 
 	}
 
 	log.Info.Println("Uploading new doc index...", doc.Hash)
+
 	indexReader, err := doc.IndexReader()
 	if err != nil {
 		return nil, err
 	}
 	defer indexReader.Close()
-	err = ctx.blobStorage.UploadBlob(doc.Hash, indexReader)
+
+	crc32c := crc32.MakeTable(crc32.Castagnoli)
+	crc32 := crc32.New(crc32c)
+	size, _ := io.Copy(crc32, indexReader)
+	checksum := crc32.Sum32()
+
+	err = indexReader.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	indexReader, err = doc.IndexReader()
+	if err != nil {
+		return nil, err
+	}
+	err = ctx.blobStorage.UploadBlob(doc.Hash, indexReader, size, checksum)
 	if err != nil {
 		return nil, err
 	}
@@ -454,16 +508,5 @@ func DocumentsFileTree(tree *HashTree) *filetree.FileTreeCtx {
 
 // SyncComplete notfies that somethings has changed (triggers tablet sync)
 func (ctx *ApiCtx) SyncComplete() error {
-	err := ctx.blobStorage.SyncComplete(ctx.hashTree.Generation)
-
-	//sync can be called once per generation, ignore the error if nothing was changed
-	if err == transport.ErrConflict {
-		log.Trace.Printf("ignoring error: %v", err)
-		return nil
-	}
-
-	if err != nil {
-		log.Error.Printf("cannot send sync %v", err)
-	}
 	return nil
 }

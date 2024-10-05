@@ -1,6 +1,10 @@
 package transport
 
 import (
+	"bytes"
+	"crypto/tls"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +12,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -44,7 +49,18 @@ type HttpClientCtx struct {
 }
 
 func CreateHttpClientCtx(tokens model.AuthTokens) HttpClientCtx {
-	var httpClient = &http.Client{Timeout: 5 * 60 * time.Second}
+	f, err := os.OpenFile("/tmp/keys", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		panic(err)
+	}
+	var httpClient = &http.Client{
+		Timeout: 5 * 60 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				KeyLogWriter: f,
+			},
+		},
+	}
 
 	return HttpClientCtx{httpClient, tokens}
 }
@@ -208,12 +224,13 @@ func (ctx HttpClientCtx) Request(authType AuthType, verb, url string, body io.Re
 }
 
 func (ctx HttpClientCtx) GetBlobStream(url string) (io.ReadCloser, int64, error) {
+	log.Trace.Printf("Get Blob Stream %s", url)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, 0, err
 	}
-	client := &http.Client{}
-	response, err := client.Do(req)
+	ctx.addAuthorization(req, UserBearer)
+	response, err := ctx.Client.Do(req)
 
 	if err != nil {
 		return nil, 0, err
@@ -224,16 +241,7 @@ func (ctx HttpClientCtx) GetBlobStream(url string) (io.ReadCloser, int64, error)
 	if response.StatusCode != http.StatusOK {
 		return nil, 0, fmt.Errorf("GetBlobStream, status code not ok %d", response.StatusCode)
 	}
-	var gen int64
-	if response.Header != nil {
-		genh := response.Header.Get(HeaderGeneration)
-		if genh != "" {
-			log.Trace.Println("got generation header: ", genh)
-			gen, err = strconv.ParseInt(genh, 10, 64)
-		}
-	}
-
-	return response.Body, gen, err
+	return response.Body, 0, err
 }
 
 // those headers are case sensitive
@@ -258,21 +266,28 @@ func addGenerationMatchHeader(req *http.Request, gen int64) {
 	}
 }
 
-func (ctx HttpClientCtx) PutRootBlobStream(url string, gen, maxRequestSize int64, reader io.Reader) (newGeneration int64, err error) {
-	req, err := http.NewRequest(http.MethodPut, url, reader)
+func (ctx HttpClientCtx) PutRootBlobStream(url string, roothash string, gen int64) (newGeneration int64, err error) {
+	requestBody, err := json.Marshal(model.PutRootRequest{
+		Generation: gen,
+		Hash:       roothash,
+		Broadcast:  true,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(requestBody))
 	if err != nil {
 		return
 	}
 	req.Header.Add("User-Agent", RmapiUserAGent)
-	addGenerationMatchHeader(req, gen)
-	addSizeHeader(req, maxRequestSize)
+	ctx.addAuthorization(req, UserBearer)
 
 	if log.TracingEnabled {
 		drequest, err := httputil.DumpRequest(req, true)
 		log.Trace.Printf("PutRootBlobStream: %s %v", string(drequest), err)
 	}
-	client := &http.Client{}
-	response, err := client.Do(req)
+	response, err := ctx.Client.Do(req)
 	if err != nil {
 		return
 	}
@@ -290,37 +305,34 @@ func (ctx HttpClientCtx) PutRootBlobStream(url string, gen, maxRequestSize int64
 		return 0, fmt.Errorf("PutRootBlobStream: got status code %d", response.StatusCode)
 	}
 
-	if response.Header == nil {
-		return 0, fmt.Errorf("PutRootBlobStream: no response headers")
-	}
-	generationHeader := response.Header.Get(HeaderGeneration)
-	if generationHeader == "" {
-		log.Warning.Println("no new generation header")
-		return
-	}
-
-	log.Trace.Println("new generation header: ", generationHeader)
-	newGeneration, err = strconv.ParseInt(generationHeader, 10, 64)
+	var responseBody model.RootRequest
+	err = json.NewDecoder(response.Body).Decode(&responseBody)
 	if err != nil {
-		log.Error.Print(err)
+		panic(err)
 	}
 
+	log.Trace.Println("new generation: ", responseBody.Generation)
+	newGeneration = responseBody.Generation
 	return
 }
-func (ctx HttpClientCtx) PutBlobStream(url string, reader io.Reader, maxRequestSize int64) (err error) {
+func (ctx HttpClientCtx) PutBlobStream(url string, reader io.Reader, size int64, checksum uint32) (err error) {
 	req, err := http.NewRequest(http.MethodPut, url, reader)
 	if err != nil {
 		return
 	}
+	req.ContentLength = size
 	req.Header.Add("User-Agent", RmapiUserAGent)
-	addSizeHeader(req, maxRequestSize)
+	req.Header.Add("Content-Type", "application-octet-stream")
+	checksumBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(checksumBytes, checksum)
+	req.Header.Add("x-goog-hash", "crc32c="+base64.StdEncoding.EncodeToString(checksumBytes))
+	ctx.addAuthorization(req, UserBearer)
 
 	if log.TracingEnabled {
 		drequest, err := httputil.DumpRequest(req, true)
 		log.Trace.Printf("PutBlobStream: %s %v", string(drequest), err)
 	}
-	client := &http.Client{}
-	response, err := client.Do(req)
+	response, err := ctx.Client.Do(req)
 	if err != nil {
 		return
 	}
