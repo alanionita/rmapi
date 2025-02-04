@@ -1,5 +1,9 @@
 # rMAPI
 
+
+> NOTICE: This diverged from the fork, because I'm using the DelusionalLogic fork that moves the api from v3 to v4 as seen in this commit https://github.com/DelusionalLogic/rmapi/commit/6ab97236769eb8fd48daa722bfb0301d6182fce3
+
+
 *Note: rMAPI is effectiviely unmaintaied at this point, and this repo will be archived in the next few weeks. Please see [this discussion for more info](https://github.com/juruen/rmapi/discussions/313).*
 
 [![Actions Status](https://github.com/juruen/rmapi/workflows/Go/badge.svg)](https://github.com/juruen/rmapi/actions)
